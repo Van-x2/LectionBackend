@@ -162,6 +162,7 @@ async function uploadLobby() {
           //builds a object to be sent to MongoDB from the request body received from the player frontend
           const participantBody = {
             name: req.body.name,
+            userid: req.body.userid,
             responses: []
           }
           let nameLower = req.body.name.toLocaleLowerCase()
@@ -170,7 +171,7 @@ async function uploadLobby() {
           activelobbies.updateOne({joincode: lobby.joincode}, {$push: {participants: participantBody}})
 
           //creates another even MORE dynamic route for SSE to player frontend
-          let clientSepRouteLive = `/lobbyclient${lobby.joincode}${nameLower}`
+          let clientSepRouteLive = `/lobbyclient${lobby.joincode}${nameLower}${req.body.userid}`
           /*
            I may add another layer of dynamic-ness to this route because
            there will be edge cases in which two people who use the same
