@@ -131,7 +131,7 @@ async function uploadLobby() {
         if(!lobbyClosed) {
           closeLobby()
         }
-        res.end
+        res.end()
       })
     })
 
@@ -230,9 +230,10 @@ async function uploadLobby() {
 
 
           //another dynamic route is created
-          let clientSepRouteSubmit = `/clientsubmitresponse${lobby.joincode}${nameLower}`
+          let clientSepRouteSubmit = `/clientsubmitresponse${lobby.joincode}${nameLower}${req.body.userid}`
           //defines the name from the frontend response body before its overwritten in the next routes
           let currentName = req.body.name
+          let currentID = req.body.userid
 
           //a route for the player frontend to submit responses to prompts created by the host
           app.post(clientSepRouteSubmit, (req, res) => {
@@ -242,7 +243,7 @@ async function uploadLobby() {
             //updates the player object within the participants array,
             //adding the contents of the req.body to the player object's 'responses' nested array
             activelobbies.updateOne(
-              { joincode: lobby.joincode, "participants.name": currentName },
+              { joincode: lobby.joincode, "participants.userid": currentID },
               { $push: { "participants.$.responses": req.body } },
             )
             //catch any errors, and log them
@@ -290,8 +291,8 @@ async function uploadLobby() {
     //checks the current time
     const nowTime = Math.floor(Date.now() / 1000)
     //respond to fufil promises
- 
-
+    //res.send('lobby closed')
+    
     //sets status to 3 in MongoDB
     await activelobbies.updateOne(
       { joincode: lobby.joincode },
@@ -314,9 +315,10 @@ async function uploadLobby() {
       console.log(`[${counter*5} sec] - still checking`)
       if(counter == 7 && activeLobbies == 0) {
         console.log('closing server')
+        server.close()
         setTimeout(() => {
           process.exit()
-        }, 2000)
+        }, 3000)
       }
       if(counter == 7 && activeLobbies >= 1) {
         console.log('there were other sessions running: continuing')
@@ -337,6 +339,6 @@ uploadLobby()
 
 
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
     console.log(`server listening on port: ${PORT}`)
 })
