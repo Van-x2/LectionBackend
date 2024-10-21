@@ -16,6 +16,9 @@ const PORT = 3000
 const uri = process.env.mongoString
 const client = new MongoClient(uri)
 
+//connect to MongoDB
+await client.connect()
+
 //Tracking how many instances / sessions are currently running on the server
 let activeLobbies = 0
 
@@ -35,8 +38,6 @@ async function uploadLobby() {
     let hostLivePoller
     let clientLivePoller
     let joincode
-    //connect to MongoDB
-    await client.connect()
 
     //gets the desired db and collection from Mongo
     const LectionData = client.db('LectionData')
@@ -314,6 +315,7 @@ async function uploadLobby() {
     const finalLobbyChecker = setInterval(() => {
       console.log(`[${counter*5} sec] - still checking`)
       if(counter == 7 && activeLobbies == 0) {
+        client.close()
         console.log('closing server')
         server.close()
         setTimeout(() => {
