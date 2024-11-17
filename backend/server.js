@@ -76,6 +76,14 @@ async function uploadLobby() {
       console.log(`[${lobby.joincode}] - created`)
     })
 
+    const Users = client.db('Users')
+    const hosts = Users.db('hosts')
+
+    await hosts.updateOne(
+      { _id: new ObjectId(lobby.hostid) },
+      { $addToSet: { groups: lobby.group } }
+    )
+
     //Responds to client with the created lobbies join code
     res.send({ joincode : lobby.joincode })
 
@@ -100,7 +108,7 @@ async function uploadLobby() {
       let lastPolledLobby
 
       
-              //sets of interval to run every 3 seconds
+              //sets of interval to run every 1 seconds
       hostLivePoller = setInterval(async () => {
         //Gets 'participants' & 'prompts' fields from the MongoDB doc with the matching joincode
         currentPolledLobby = await activelobbies.findOne(
@@ -123,7 +131,7 @@ async function uploadLobby() {
           //reasign lastPolledLobby (to use for comparisons with modern pulled data)
           lastPolledLobby = currentPolledLobby
         }
-      }, 2000)
+      }, 1000)
       
 
       //upon a close, end the stream
@@ -217,7 +225,7 @@ async function uploadLobby() {
                   //reasign lastPolledLobby
                   lastPolledLobby = currentPolledLobby
                 }
-              }, 3000)
+              }, 1000)
             
 
 
