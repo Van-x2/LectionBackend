@@ -77,12 +77,34 @@ async function uploadLobby() {
     })
 
     const Users = client.db('Users')
-    const hosts = Users.db('hosts')
+    const hosts = Users.collection('hosts')
 
-    await hosts.updateOne(
-      { _id: new ObjectId(lobby.hostid) },
-      { $addToSet: { groups: lobby.group } }
-    )
+    try {
+      console.log("Attempting update with hostid:", lobby.hostid);
+      console.log("Group to add:", lobby.group);
+      
+      const result = await hosts.updateOne(
+          { _id: new ObjectId(lobby.hostid) },
+          { $addToSet: { groups: lobby.group } }
+      );
+      
+      console.log("Update result:", result);
+  } catch (error) {
+      console.error("Update failed:", error);
+  }
+  try {
+    console.log("Attempting update with hostid:", lobby.hostid);
+    console.log("Group to add:", lobby.group);
+    
+    const result = await hosts.updateOne(
+        { _id: new ObjectId(lobby.hostid) },
+        { $set: {lastgroup: lobby.group} }
+    );
+    
+    console.log("Update result:", result);
+} catch (error) {
+    console.error("Update failed:", error);
+}
 
     //Responds to client with the created lobbies join code
     res.send({ joincode : lobby.joincode })
