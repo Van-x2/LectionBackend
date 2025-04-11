@@ -24,7 +24,7 @@ let activeLobbies = 0
 //initial route (the host calls this route when creating a lobby)
 app.post('/createlobby', (req, res) => {
   activeLobbies++;
-const thenTime = Math.floor(Date.now() / 1000)
+let thenTime
 //defines lobby object taken from request body
 const lobby = req.body
 
@@ -297,6 +297,8 @@ async function uploadLobby() {
                 $set: { status: 2 }
               }
             )
+            //starts the timer for the lobby
+            thenTime = Math.floor(Date.now() / 1000)
 
           })
 
@@ -313,6 +315,8 @@ async function uploadLobby() {
         closeLobby()
       }
     })
+
+    
     async function closeLobby() {
     //decrement the active sessions by 1
     activeLobbies--;
@@ -335,7 +339,28 @@ async function uploadLobby() {
     const activelobby = await activelobbies.findOne({joincode: lobby.joincode})
     activelobby.status = 3
     activelobby.duration = (nowTime - thenTime)
-    console.log(`[${lobby.joincode}] - completed`)
+
+    const durationSeconds = (nowTime - thenTime) / 1000;
+    const minutesUsed = Math.floor(durationSeconds / 60);
+    
+    console.log('Minutes used:', minutesUsed);
+
+    if(activelobby.duration == NaN && activelobby.duration == 0 ) {
+      activelobby.duration = 0
+    }
+    await hosts.updateOne(
+      { _id: new ObjectId(lobby.hostid) },
+      {
+        $inc: { lobbyMinutesUsed: activelobby.duration }
+      }
+    )
+
+    await hosts.updateOne(
+      { _id: new ObjectId(lobby.hostid) },
+      { $addToSet: { groups: lobby.group } }
+    )
+
+    console.log(`[${lobby.joincode}] - completed (alive for ${activelobby.duration})`)
     await completedlobbies.insertOne(activelobby)
     await activelobbies.deleteOne({ joincode: lobby.joincode })
     //checks for active lobbies for 30 seconds,
