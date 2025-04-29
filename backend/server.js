@@ -105,6 +105,9 @@ async function uploadLobby() {
 } catch (error) {
     console.error("Update failed:", error);
 }
+    //Defines some lection stats to be updated throughout the lobby
+    let numberOfStudents = 0
+    let promptsSubmitted = 0
 
     //Responds to client with the created lobbies join code
     res.send({ joincode : lobby.joincode })
@@ -188,6 +191,7 @@ async function uploadLobby() {
 
           //let the client know that they have joined
           res.send({message: 'joined the lobby', joined: true})
+          numberOfStudents = numberOfStudents + 1
 
           //builds a object to be sent to MongoDB from the request body received from the player frontend
           const participantBody = {
@@ -289,6 +293,10 @@ async function uploadLobby() {
           app.post(hostSepRouteSubmit, (req, res) => {
             //respond to fufil promises
             res.send('received')
+
+            //Increments Stats
+            promptsSubmitted = promptsSubmitted + 1
+
             //update the prompts array of the same lobby, adding the sent prompt
             activelobbies.updateOne(
               { joincode: lobby.joincode },
@@ -344,6 +352,9 @@ async function uploadLobby() {
     const minutesUsed = Math.floor(durationSeconds / 60);
     
     console.log('Minutes used:', minutesUsed);
+    console.log('Students Taught:', numberOfStudents);
+    console.log('Prompts Submitted:', promptsSubmitted);
+
 
     if(activelobby.duration == NaN && activelobby.duration == 0 ) {
       activelobby.duration = 0
@@ -351,7 +362,11 @@ async function uploadLobby() {
     await hosts.updateOne(
       { _id: new ObjectId(lobby.hostid) },
       {
-        $inc: { lobbyMinutesUsed: activelobby.duration }
+        $inc: { lobbyMinutesUsed: activelobby.duration },
+        $inc: { lectionariesStarted: 1 },
+        $inc: { studentsTaught: numberOfStudents },
+        $inc: { promptsSubmitted: promptsSubmitted },
+
       }
     )
 
