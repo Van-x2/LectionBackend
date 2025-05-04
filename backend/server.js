@@ -148,11 +148,20 @@ app.post('/joinlobby/:joincode', async (req, res) => {
    // Check lobby status
    const statusResult = await activelobbies.findOne(
      { joincode: joincode },
-     { projection: { status: 1, _id: 0 } }
+     { projection: { status: 1, lobbyMembershipLevel: 1, participants: 1, _id: 0 } }
    )
    
    if (!statusResult) {
      return res.send({ message: 'lobby not found', joined: false })
+   }
+
+    // Checks if the lobby was created by a host with a Lection standard account
+    if (statusResult.lobbyMembershipLevel == 'standard') {
+    
+    //If the length of the participants array is above 14, do not allow the user to join
+    if (statusResult.participants.length <= 10) {
+      return res.send({ message: 'maximum ammount of participants reached', joined: false })
+    }
    }
    
    if (statusResult.status >= 2) {
