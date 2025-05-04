@@ -152,20 +152,20 @@ app.post('/joinlobby/:joincode', async (req, res) => {
    )
    
    if (!statusResult) {
-     return res.send({ message: 'lobby not found', joined: false })
+     return res.send({ message: 'PIN not recognized', joined: false })
    }
 
     // Checks if the lobby was created by a host with a Lection standard account
     if (statusResult.lobbyMembershipLevel == 'standard') {
     
     //If the length of the participants array is above 14, do not allow the user to join
-    if (statusResult.participants.length <= 10) {
-      return res.send({ message: 'maximum ammount of participants reached', joined: false })
+    if (statusResult.participants.length >= 10) {
+      return res.send({ message: 'Maximum amount of participants reached', joined: false })
     }
    }
    
    if (statusResult.status >= 2) {
-     return res.send({ message: 'cannot join lobby mid-game', joined: false })
+     return res.send({ message: 'Cannot join lobby after it has started', joined: false })
    }
    
    // Add participant to lobby
