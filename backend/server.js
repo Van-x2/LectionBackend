@@ -1,374 +1,402 @@
-//express import/setup
+// Updated backend code with fixed dynamic routing for Kubernetes/Fly.io
+
 const express = require('express')
 const app = express()
-//cors import/setup
 const cors = require('cors')
 app.use(cors())
-//bodyparser middleware import/setup
 const bodyParser = require('body-parser')
 app.use(bodyParser.json())
-//env import
 require('dotenv').config()
-//Mongo import
-const { MongoClient, ServerApiVersion, ObjectId, $match, Db } = require('mongodb')
-//Defining stuffs
-const PORT = 3000
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb')
+
+// Use environment variable for port
+const PORT = process.env.PORT || 3000
 const uri = process.env.mongoString
 const client = new MongoClient(uri)
 
-//Tracking how many instances / sessions are currently running on the server
-let activeLobbies = 0
-
-
-
-//initial route (the host calls this route when creating a lobby)
-app.post('/createlobby', (req, res) => {
-  activeLobbies++;
-const thenTime = Math.floor(Date.now() / 1000)
-//defines lobby object taken from request body
-const lobby = req.body
-
-//this is where we upload all data to mongoDB (a lot of data)
-async function uploadLobby() {
-    //defines the joincode for use later in the function
-    let lobbyClosed = false
-    let hostLivePoller
-    let clientLivePoller
-    let joincode
-    //connect to MongoDB
-    await client.connect()
-
-    //gets the desired db and collection from Mongo
-    const LectionData = client.db('LectionData')
-    const activelobbies = LectionData.collection('activelobbies')
-    const completedlobbies = LectionData.collection('completedlobbies')
-
-    //Function to generate a unique joincode that is no more than 6 digits
-    async function createJoinCode() {
-        //defaults to repeating the while() loop
-        let unique = false
-        //if unique = false, then repeat
-        while(!unique) {
-          //sets a temporary joincode using some simple JS to generate the codoe
-          joincode = Number((Math.floor(Math.random() * 1000000)).toString().padStart(6, '0'))
-          
-          //searches through the activemongoDB collection for documents matching the temp joincode
-          const count = await activelobbies.countDocuments({ joincode: joincode })
-          
-          //if there is no matching joincodes (AKA its unique) then set unique to true
-          unique = count === 0
-
-          //if unique is true, this isnt repeated
-        }
-        //the temp joincode becomes permanent and is returned
-        return joincode
-    }
-
-    //adds the unique joincode to the lobby object using the function created above
-    lobby.joincode = await createJoinCode()
-    
-    //saves the joincode to a variable outside of the function scope for later use
-    playerJoincode = lobby.joincode
-
-    //inserts the lobby object into mongoDB and logs the joincode
-    await activelobbies.insertOne(lobby)
-    .then(result => {
-      console.log(`[${lobby.joincode}] - created`)
-    })
-
-    const Users = client.db('Users')
-    const hosts = Users.collection('hosts')
-
-    try {
-      console.log("Attempting update with hostid:", lobby.hostid);
-      console.log("Group to add:", lobby.group);
-      
-      const result = await hosts.updateOne(
-          { _id: new ObjectId(lobby.hostid) },
-          { $addToSet: { groups: lobby.group } }
-      );
-      
-      console.log("Update result:", result);
-  } catch (error) {
-      console.error("Update failed:", error);
-  }
-  try {
-    console.log("Attempting update with hostid:", lobby.hostid);
-    console.log("Group to add:", lobby.group);
-    
-    const result = await hosts.updateOne(
-        { _id: new ObjectId(lobby.hostid) },
-        { $set: {lastgroup: lobby.group} }
-    );
-    
-    console.log("Update result:", result);
-} catch (error) {
-    console.error("Update failed:", error);
+// Store active lobbies in MongoDB instead of memory
+async function getActiveLobbiesCount() {
+ const db = client.db('LectionData')
+ const stats = db.collection('serverStats')
+ const result = await stats.findOne({ statId: 'activeLobbies' })
+ return result?.count || 0
 }
 
-    //Responds to client with the created lobbies join code
-    res.send({ joincode : lobby.joincode })
+async function updateActiveLobbiesCount(increment) {
+ const db = client.db('LectionData')
+ const stats = db.collection('serverStats')
+ await stats.updateOne(
+   { statId: 'activeLobbies' },
+   { $inc: { count: increment } },
+   { upsert: true }
+ )
+}
 
-    //creates dynamic routes based on the current joincode
-    let hostSepRouteLive = `/lobbyhost${lobby.joincode}`
-    let clientSepRoute = `/joinlobby${lobby.joincode}`
-    //I do this to keep instances seperate (idk if there a better way of doing this :P )
-
-    //a route that uses server sent events to communicate with the frontend host
-    app.get(hostSepRouteLive, async (req, res) => {
-      //headers needed for SSE configuration
-      res.writeHead(200, {
-        "Connection": "keep-alive",
-        "Cache-Control": "no-cache",
-        "Content-Type": "text/event-stream",
-      })
-      //I honestly have no idea what this one does
-      res.flushHeaders()
-
-      //Defines some variables used while polling below
-      let currentPolledLobby
-      let lastPolledLobby
-
-      
-              //sets of interval to run every 1 seconds
-      hostLivePoller = setInterval(async () => {
-        //Gets 'participants' & 'prompts' fields from the MongoDB doc with the matching joincode
-        currentPolledLobby = await activelobbies.findOne(
-          {joincode: lobby.joincode},
-          { projection: { participants: 1, prompts: 1, _id: 0 } }
-        )
-        //If theres a problem, log the result to console
-        .catch(() => {console.log(currentPolledLobby);})
-        //If there is a difference between the currently polled data vs the last polled data do something
-        if((JSON.stringify(currentPolledLobby) !== JSON.stringify(lastPolledLobby))) {
-          //catch any null value changes and log when it happens
-          if(currentPolledLobby == null) {
-          //console.log('null')
-          }
-          else{
-            //any other changes can be sent to the front end with SSE
-            res.write(`data:${JSON.stringify(currentPolledLobby)}\n\n`)
-          }
-          
-          //reasign lastPolledLobby (to use for comparisons with modern pulled data)
-          lastPolledLobby = currentPolledLobby
-        }
-      }, 1000)
-      
-
-      //upon a close, end the stream
-      res.on('close', () => {
-        if(!lobbyClosed) {
-          closeLobby()
-        }
-        res.end()
-      })
-    })
-
-    //a route that lets frontend players 'join' the lobby (AKA add their names to the DB)
-    app.post(clientSepRoute, async (req, res) => {
-
-
-
-      //looks for the lobby matching the joincode and takes only its 'status' property
-      statusStatus = await activelobbies.findOne(
-        {joincode: lobby.joincode},
-        { projection: { status: 1, _id: 0 } }
-      )
-      .then(response => {
-        //status meanings: 1 = initial phase (joinable to players), 2 = active phase (unjoinable to players)
-        //may change this in the future to allow midgame joining from players
-        if(response.status >= 2) {
-          //let the client know that they cannot join 
-          res.send({message: 'cannot join lobby mid-game', joined: false})
-        }
-        else{
-          //otherwise (AKA when the status is 1 or 0)
-          console.log(`[${joincode}]: ${req.body.name} added`)
-
-          //let the client know that they have joined
-          res.send({message: 'joined the lobby', joined: true})
-
-          //builds a object to be sent to MongoDB from the request body received from the player frontend
-          const participantBody = {
-            name: req.body.name,
-            userid: req.body.userid,
-            responses: []
-          }
-          let nameLower = req.body.name.toLocaleLowerCase()
-
-          //updates MongoDB with the object created above
-          activelobbies.updateOne({joincode: lobby.joincode}, {$push: {participants: participantBody}})
-
-          //creates another even MORE dynamic route for SSE to player frontend
-          let clientSepRouteLive = `/lobbyclient${lobby.joincode}${nameLower}${req.body.userid}`
-          /*
-           I may add another layer of dynamic-ness to this route because
-           there will be edge cases in which two people who use the same
-           name and are in the same lobby will have the same route
-           */
-
-          //a route that uses server sent events to communicate with the player frontend
-          app.get(clientSepRouteLive, async (req, res) => {
-            //configures headers for SSE
-            res.writeHead(200, {
-              "Connection": "keep-alive",
-              "Cache-Control": "no-cache",
-              "Content-Type": "text/event-stream",
-            })
-            res.flushHeaders()
-
-
-            //simmilar to the above SSE route used by host
-            //sets up variables for polling
-            let currentPolledLobby
-            let lastPolledLobby
-
-
-              clientLivePoller = setInterval(async () => {
-                //views document matching the lobby joincode, and takes ONLY the prompts aray back
-                currentPolledLobby = await activelobbies.findOne(
-                  {joincode: lobby.joincode},
-                  { projection: { status: 1, prompts: 1, _id: 0 } }
-                )
-                //logs the response if there is an issue
-                .catch(() => {console.log(currentPolledLobby);})
-                //If there is a difference between the currently polled data vs the last polled data do something
-                if((JSON.stringify(currentPolledLobby) !== JSON.stringify(lastPolledLobby))) {
-                  //catches and logs when a null value change is detected
-                  if(currentPolledLobby == null) {
-                  //console.log('null')
-                  }
-                  //otherwise send it to the player frontend as a SSE
-                  else{
-                    res.write(`data:${JSON.stringify(currentPolledLobby)}\n\n`)
-                  }
-                  
-                  //reasign lastPolledLobby
-                  lastPolledLobby = currentPolledLobby
-                }
-              }, 1000)
-            
-
-
-
-
-            res.on('close', () => {
-              res.end()
-            })
-          })
-
-
-          //another dynamic route is created
-          let clientSepRouteSubmit = `/clientsubmitresponse${lobby.joincode}${nameLower}${req.body.userid}`
-          //defines the name from the frontend response body before its overwritten in the next routes
-          let currentName = req.body.name
-          let currentID = req.body.userid
-
-          //a route for the player frontend to submit responses to prompts created by the host
-          app.post(clientSepRouteSubmit, (req, res) => {
-            //respond to fufil promises
-            res.send('received')
-            //finds player object with matching 'currentName' property
-            //updates the player object within the participants array,
-            //adding the contents of the req.body to the player object's 'responses' nested array
-            activelobbies.updateOne(
-              { joincode: lobby.joincode, "participants.userid": currentID },
-              { $push: { "participants.$.responses": req.body } },
-            )
-            //catch any errors, and log them
-            .catch(error => console.error(error))
-
-          })
-
-
-          //another dynamic route is created this time for the host using the joincode+hostid as a unique route
-          let hostSepRouteSubmit = `/hostsubmitprompt${lobby.joincode}${lobby.hostid}`
-
-          //a route that lets hosts submit prompts to MongoDB to be shown to the player frontend clients
-          app.post(hostSepRouteSubmit, (req, res) => {
-            //respond to fufil promises
-            res.send('received')
-            //update the prompts array of the same lobby, adding the sent prompt
-            activelobbies.updateOne(
-              { joincode: lobby.joincode },
-              { 
-                $push: { prompts: req.body.prompt },
-                $set: { status: 2 }
-              }
-            )
-
-          })
-
-        }
-      })
-    })
-
-    //another dynamic route is created
-    let hostSepRouteClose = `/hostlobbyclose${lobby.joincode}${lobby.hostid}`
-          
-    //a route that handles moving finished lobbies from 'activelobbies' DB to 'completedlobbies' DB
-    app.post(hostSepRouteClose, async (req, res) => {
-      if(!lobbyClosed) {
-        closeLobby()
-      }
-    })
-    async function closeLobby() {
-    //decrement the active sessions by 1
-    activeLobbies--;
-
-    lobbyClosed = true
-    //checks the current time
-    const nowTime = Math.floor(Date.now() / 1000)
-    //respond to fufil promises
-    //res.send('lobby closed')
-    
-    //sets status to 3 in MongoDB
-    await activelobbies.updateOne(
-      { joincode: lobby.joincode },
-      { $set: { status: 3 } }
-    )
-    setTimeout(async () => {
-    clearInterval(hostLivePoller)
-    clearInterval(clientLivePoller)
-    //pulls the final state of the lobby from activelobbies
-    const activelobby = await activelobbies.findOne({joincode: lobby.joincode})
-    activelobby.status = 3
-    activelobby.duration = (nowTime - thenTime)
-    console.log(`[${lobby.joincode}] - completed`)
-    await completedlobbies.insertOne(activelobby)
-    await activelobbies.deleteOne({ joincode: lobby.joincode })
-    //checks for active lobbies for 30 seconds,
-    //if no lobbies are open after 30 seconds then terminate the instance
-    let counter = 1
-    const finalLobbyChecker = setInterval(() => {
-      console.log(`[${counter*5} sec] - still checking`)
-      if(counter == 7 && activeLobbies == 0) {
-        console.log('closing server')
-        server.close()
-        setTimeout(() => {
-          process.exit()
-        }, 3000)
-      }
-      if(counter == 7 && activeLobbies >= 1) {
-        console.log('there were other sessions running: continuing')
-        clearInterval(finalLobbyChecker)
-      }
-      counter++
-    }, 5000)
-    }, 3500)
-    }
-    
-
-    }
-
-//calls the function, creating all this chaos lol
-uploadLobby()
+// Add health check for Kubernetes
+app.get('/health', (req, res) => {
+ res.status(200).send('OK')
 })
 
+// Create standardized parameterized routes
+app.post('/createlobby', async (req, res) => {
+ await updateActiveLobbiesCount(1)
+ 
+ // Define lobby object from request body
+ const lobby = req.body
+ 
+ try {
+   await client.connect()
+   
+   const LectionData = client.db('LectionData')
+   const activelobbies = LectionData.collection('activelobbies')
+   
+   // Generate unique join code
+   lobby.joincode = await createJoinCode(activelobbies)
+   console.log(`[${lobby.joincode}] - created`)
+   
+   // Insert lobby into MongoDB
+   await activelobbies.insertOne(lobby)
+   
+   // Update host's groups
+   const Users = client.db('Users')
+   const hosts = Users.collection('hosts')
+   
+   await hosts.updateOne(
+     { _id: new ObjectId(lobby.hostid) },
+     { 
+       $addToSet: { groups: lobby.group },
+       $set: { lastgroup: lobby.group }
+     }
+   )
+   
+   // Respond with join code
+   res.send({ joincode: lobby.joincode })
+   
+ } catch (error) {
+   console.error("Error creating lobby:", error)
+   res.status(500).send({ error: "Failed to create lobby" })
+   await updateActiveLobbiesCount(-1)
+ }
+})
 
+// Host SSE endpoint with path parameters
+app.get('/lobbyhost/:joincode', async (req, res) => {
+ const joincode = parseInt(req.params.joincode)
+ 
+ // Headers for SSE
+ res.writeHead(200, {
+   "Connection": "keep-alive",
+   "Cache-Control": "no-cache",
+   "Content-Type": "text/event-stream",
+ })
+ res.flushHeaders()
+ 
+ const LectionData = client.db('LectionData')
+ const activelobbies = LectionData.collection('activelobbies')
+ 
+ // Variables for polling
+ let currentPolledLobby
+ let lastPolledLobby
+ let hostLivePoller
+ let lobbyClosed = false
+ 
+ // Set up polling interval
+ hostLivePoller = setInterval(async () => {
+   try {
+     currentPolledLobby = await activelobbies.findOne(
+       {joincode: joincode},
+       { projection: { participants: 1, prompts: 1, _id: 0 } }
+     )
+     
+     if (JSON.stringify(currentPolledLobby) !== JSON.stringify(lastPolledLobby)) {
+       if (currentPolledLobby != null) {
+         res.write(`data:${JSON.stringify(currentPolledLobby)}\n\n`)
+       }
+       lastPolledLobby = currentPolledLobby
+     }
+   } catch (error) {
+     console.error(`Poll error for host lobby ${joincode}:`, error)
+   }
+ }, 1000)
+ 
+ // Handle connection close
+ res.on('close', async () => {
+   clearInterval(hostLivePoller)
+   
+   // Close lobby if host disconnects
+   if (!lobbyClosed) {
+     try {
+       await closeLobby(joincode)
+       lobbyClosed = true
+     } catch (error) {
+       console.error(`Error closing lobby ${joincode}:`, error)
+     }
+   }
+   
+   res.end()
+ })
+})
 
+// Client join endpoint with path parameters
+app.post('/joinlobby/:joincode', async (req, res) => {
+ const joincode = parseInt(req.params.joincode)
+ 
+ try {
+   const LectionData = client.db('LectionData')
+   const activelobbies = LectionData.collection('activelobbies')
+   
+   // Check lobby status
+   const statusResult = await activelobbies.findOne(
+     { joincode: joincode },
+     { projection: { status: 1, lobbyMembershipLevel: 1, participants: 1, _id: 0 } }
+   )
+   
+   if (!statusResult) {
+     return res.send({ message: 'PIN not recognized', joined: false })
+   }
 
+    // Checks if the lobby was created by a host with a Lection standard account
+    if (statusResult.lobbyMembershipLevel == 'standard') {
+    
+    //If the length of the participants array is above 14, do not allow the user to join
+    if (statusResult.participants.length >= 10) {
+      return res.send({ message: 'Maximum amount of participants reached', joined: false })
+    }
+   }
+   
+   if (statusResult.status >= 2) {
+     return res.send({ message: 'Cannot join lobby after it has started', joined: false })
+   }
+   
+   // Add participant to lobby
+   const participantBody = {
+     name: req.body.name,
+     userid: req.body.userid,
+     responses: []
+   }
+   
+   await activelobbies.updateOne(
+     { joincode: joincode }, 
+     { $push: { participants: participantBody }}
+   )
+   
+   console.log(`[${joincode}]: ${req.body.name} added`)
+   res.send({ message: 'joined the lobby', joined: true })
+   
+ } catch (error) {
+   console.error(`Error joining lobby ${joincode}:`, error)
+   res.status(500).send({ message: 'server error', joined: false })
+ }
+})
+
+// Client SSE endpoint with path parameters
+app.get('/lobbyclient/:joincode/:userid', async (req, res) => {
+ const joincode = parseInt(req.params.joincode)
+ const userid = req.params.userid
+ 
+ // Headers for SSE
+ res.writeHead(200, {
+   "Connection": "keep-alive",
+   "Cache-Control": "no-cache",
+   "Content-Type": "text/event-stream",
+ })
+ res.flushHeaders()
+ 
+ const LectionData = client.db('LectionData')
+ const activelobbies = LectionData.collection('activelobbies')
+ 
+ // Variables for polling
+ let currentPolledLobby
+ let lastPolledLobby
+ let clientLivePoller
+ 
+ // Set up polling interval
+ clientLivePoller = setInterval(async () => {
+   try {
+     currentPolledLobby = await activelobbies.findOne(
+       { joincode: joincode },
+       { projection: { status: 1, prompts: 1, _id: 0 } }
+     )
+     
+     if (JSON.stringify(currentPolledLobby) !== JSON.stringify(lastPolledLobby)) {
+       if (currentPolledLobby != null) {
+         res.write(`data:${JSON.stringify(currentPolledLobby)}\n\n`)
+       }
+       lastPolledLobby = currentPolledLobby
+     }
+   } catch (error) {
+     console.error(`Poll error for client ${userid} in lobby ${joincode}:`, error)
+   }
+ }, 1000)
+ 
+ // Handle connection close
+ res.on('close', () => {
+   clearInterval(clientLivePoller)
+   res.end()
+ })
+})
+
+// Client submission endpoint with path parameters
+app.post('/clientsubmitresponse/:joincode/:userid', async (req, res) => {
+ const joincode = parseInt(req.params.joincode)
+ const userid = req.params.userid
+ 
+ try {
+   const LectionData = client.db('LectionData')
+   const activelobbies = LectionData.collection('activelobbies')
+   
+   await activelobbies.updateOne(
+     { joincode: joincode, "participants.userid": userid },
+     { $push: { "participants.$.responses": req.body } }
+   )
+   
+   res.send('received')
+ } catch (error) {
+   console.error(`Error submitting response for ${userid} in lobby ${joincode}:`, error)
+   res.status(500).send('error')
+ }
+})
+
+// Host submission endpoint with path parameters
+app.post('/hostsubmitprompt/:joincode/:hostid', async (req, res) => {
+  const joincode = parseInt(req.params.joincode)
+  
+  try {
+    const LectionData = client.db('LectionData')
+    const activelobbies = LectionData.collection('activelobbies')
+    
+    // First check if this is the first prompt (which would set the start time)
+    const lobby = await activelobbies.findOne(
+      { joincode: joincode },
+      { projection: { status: 1, startTime: 1 } }
+    )
+    
+    // Only set startTime if status is not 2 yet (first prompt)
+    const updateData = { 
+      $push: { prompts: req.body.prompt },
+      $set: { status: 2 }
+    }
+    
+    // Only add startTime if it doesn't exist yet
+    if (!lobby.startTime) {
+      updateData.$set.startTime = Math.floor(Date.now() / 1000)
+    }
+    
+    await activelobbies.updateOne(
+      { joincode: joincode },
+      updateData
+    )
+    
+    res.send('received')
+  } catch (error) {
+    console.error(`Error submitting prompt for lobby ${joincode}:`, error)
+    res.status(500).send('error')
+  }
+})
+
+// Host close lobby endpoint with path parameters
+app.post('/hostlobbyclose/:joincode/:hostid', async (req, res) => {
+ const joincode = parseInt(req.params.joincode)
+ 
+ try {
+   await closeLobby(joincode)
+   res.send('lobby closed')
+ } catch (error) {
+   console.error(`Error closing lobby ${joincode}:`, error)
+   res.status(500).send('error')
+ }
+})
+
+// Helper function to create a unique join code
+async function createJoinCode(collection) {
+ let unique = false
+ let joincode
+ 
+ while (!unique) {
+   joincode = Number((Math.floor(Math.random() * 1000000)).toString().padStart(6, '0'))
+   const count = await collection.countDocuments({ joincode: joincode })
+   unique = count === 0
+ }
+ 
+ return joincode
+}
+
+// Helper function to close a lobby
+async function closeLobby(joincode) {
+ const LectionData = client.db('LectionData')
+ const activelobbies = LectionData.collection('activelobbies')
+ const completedlobbies = LectionData.collection('completedlobbies')
+ const Users = client.db('Users')
+ const hosts = Users.collection('hosts')
+ 
+ // Update status first
+ await activelobbies.updateOne(
+   { joincode: joincode },
+   { $set: { status: 3 } }
+ )
+ 
+ // Wait for any pending operations
+ await new Promise(resolve => setTimeout(resolve, 3000))
+ 
+ // Get final state
+ const activelobby = await activelobbies.findOne({ joincode: joincode })
+ if (!activelobby) return
+ 
+ // Calculate duration
+ const nowTime = Math.floor(Date.now() / 1000)
+ const startTime = activelobby.startTime || nowTime
+ const duration = nowTime - startTime
+ 
+ // Update stats
+ const numberOfStudents = activelobby.participants?.length || 0
+ const promptsSubmitted = activelobby.prompts?.length || 0
+ 
+ // Update host stats
+ if (activelobby.hostid) {
+   await hosts.updateOne(
+     { _id: new ObjectId(activelobby.hostid) },
+     {
+       $inc: {
+         lobbyMinutesUsed: duration,
+         "stats.lectionariesStarted": 1,
+         "stats.studentsTaught": numberOfStudents,
+         "stats.promptsSubmitted": promptsSubmitted
+       }
+     }
+   )
+ }
+ 
+ // Add to completed lobbies
+ activelobby.status = 3
+ activelobby.duration = duration
+ activelobby.endTime = nowTime
+ 
+ await completedlobbies.insertOne(activelobby)
+ await activelobbies.deleteOne({ joincode: joincode })
+ await updateActiveLobbiesCount(-1)
+ 
+ console.log(`[${joincode}] - completed (alive for ${duration} seconds)`)
+}
+
+// Graceful shutdown
+process.on('SIGTERM', gracefulShutdown)
+process.on('SIGINT', gracefulShutdown)
+
+async function gracefulShutdown() {
+ console.log('Shutting down gracefully...')
+ try {
+   await client.close()
+   server.close(() => {
+     console.log('Server closed')
+     process.exit(0)
+   })
+ } catch (error) {
+   console.error('Error during shutdown:', error)
+   process.exit(1)
+ }
+}
+
+// Start server
 const server = app.listen(PORT, () => {
-    console.log(`server listening on port: ${PORT}`)
+ console.log(`Server listening on port: ${PORT}`)
 })
