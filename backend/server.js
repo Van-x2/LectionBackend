@@ -272,8 +272,13 @@ app.post('/hostsubmitprompt/:joincode/:hostid', async (req, res) => {
     )
     
     // Only set startTime if status is not 2 yet (first prompt)
-    const updateData = { 
-      $push: { prompts: req.body.prompt },
+    const updateData = {
+      $push: {
+        prompts: {
+          prompt: req.body.prompt,
+          promptIndex: req.body.promptIndex
+        }
+      },
       $set: { status: 2 }
     }
     
